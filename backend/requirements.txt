@@ -23,14 +23,17 @@ pypdf==3.17.4
 langchain==0.1.0
 langchain-openai==0.0.2
 langchain-community==0.0.10
+langchain-google-genai==0.0.5
 openai==1.7.2
 anthropic==0.8.1
+google-generativeai==0.3.2
 
 # Vector Store (using pgvector - PostgreSQL extension)
 # No additional packages needed - pgvector is a PostgreSQL extension
 
 # Embeddings
-sentence-transformers==2.2.2
+sentence-transformers==2.3.1
+transformers==4.36.2
 
 # Task Queue
 celery==5.3.4

@@ -13,6 +13,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.services.table_parser import TableParser
+from app.services.vector_store import VectorStore
 from app.db.session import SessionLocal
 from app.models.transaction import CapitalCall, Distribution, Adjustment
 from app.models.fund import Fund
@@ -29,10 +30,20 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
-    """Process PDF documents and extract structured data"""
+    """
+    Process PDF documents and extract structured data
 
-    def __init__(self):
+    This class handles:
+    - PDF validation and parsing
+    - Table extraction and classification
+    - Text chunking for RAG
+    - Automatic storage to vector database
+    """
+
+    def __init__(self, db=None):
         self.table_parser = TableParser()
+        self.vector_store = None  # Initialize lazily to avoid circular dependencies
+        self.db = db  # Database session for vector store
 
     def _validate_pdf(self, file_path: str) -> None:
         """
@@ -234,6 +245,18 @@ class DocumentProcessor:
 
                 text_chunks = self._chunk_text(full_text, document_id, fund_id)
                 stats['text_chunks'] = len(text_chunks)
+
+                # Store text chunks in vector database for RAG
+                if text_chunks:
+                    try:
+                        stored_count = self._store_chunks_to_vector_db(text_chunks)
+                        stats['chunks_stored_in_vector_db'] = stored_count
+                        logger.info(f"Stored {stored_count} text chunks to vector database")
+                    except Exception as e:
+                        warning_msg = f"Failed to store chunks to vector database: {str(e)}"
+                        warnings.append(warning_msg)
+                        logger.warning(warning_msg)
+                        stats['chunks_stored_in_vector_db'] = 0
 
                 # Determine final status
                 status = 'completed'
@@ -460,3 +483,38 @@ class DocumentProcessor:
         text = re.sub(r'\n{3,}', '\n\n', text)
 
         return text.strip()
+
+    def _store_chunks_to_vector_db(self, text_chunks: List[Dict[str, Any]]) -> int:
+        """
+        Store text chunks to vector database for RAG
+
+        Args:
+            text_chunks: List of text chunks with metadata
+
+        Returns:
+            Number of chunks successfully stored
+
+        Raises:
+            Exception: If vector store initialization or storage fails
+        """
+        try:
+            # Initialize vector store lazily
+            if self.vector_store is None:
+                self.vector_store = VectorStore(db=self.db) if self.db else VectorStore()
+
+            # Prepare documents for batch insertion
+            documents = []
+            for chunk in text_chunks:
+                documents.append({
+                    'text': chunk['text'],
+                    'metadata': chunk['metadata']
+                })
+
+            # Store in batch for efficiency
+            stored_count = self.vector_store.add_documents_batch(documents, batch_size=50)
+
+            return stored_count
+
+        except Exception as e:
+            logger.error(f"Failed to store chunks to vector database: {e}")
+            raise

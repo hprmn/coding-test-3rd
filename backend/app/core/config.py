@@ -2,6 +2,7 @@
 Application configuration
 """
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from typing import List
 
 
@@ -32,7 +33,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4-turbo-preview"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    
+
+    # Google Gemini
+    GOOGLE_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-pro"
+    GEMINI_EMBEDDING_MODEL: str = "models/embedding-001"
+
     # Anthropic (optional)
     ANTHROPIC_API_KEY: str = ""
     
@@ -51,10 +57,13 @@ class Settings(BaseSettings):
     # RAG
     TOP_K_RESULTS: int = 5
     SIMILARITY_THRESHOLD: float = 0.7
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+
+    # Pydantic v2 configuration
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
 
 settings = Settings()

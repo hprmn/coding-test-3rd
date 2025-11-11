@@ -5,6 +5,7 @@ This module contains pytest fixtures that are shared across all tests.
 """
 import pytest
 import sys
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
@@ -12,6 +13,15 @@ from typing import List, Dict, Any
 # Add app to path
 backend_path = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_path))
+
+# Configure database URL for local testing (not in Docker)
+# Override DATABASE_URL to use localhost instead of postgres hostname
+if "DATABASE_URL" in os.environ and "postgres:" in os.environ["DATABASE_URL"]:
+    # Replace postgres hostname with localhost for local testing
+    os.environ["DATABASE_URL"] = os.environ["DATABASE_URL"].replace("postgres:", "localhost:")
+elif "DATABASE_URL" not in os.environ:
+    # Set default for local testing
+    os.environ["DATABASE_URL"] = "postgresql://funduser:fundpass@localhost:5432/funddb"
 
 
 @pytest.fixture

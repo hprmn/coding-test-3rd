@@ -21,20 +21,33 @@ class TestRealPDFProcessing:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.getenv("GOOGLE_API_KEY") and not os.getenv("OPENAI_API_KEY"),
+        reason="Requires API key for embeddings"
+    )
     async def test_process_sample_pdf(self, sample_pdf_path, postgres_test_fund):
         """Test processing the actual sample PDF file"""
         if not os.path.exists(sample_pdf_path):
             pytest.skip(f"Sample PDF not found at {sample_pdf_path}")
 
-        result = await self.processor.process_document(
-            file_path=sample_pdf_path,
-            document_id=1,
-            fund_id=postgres_test_fund.id
-        )
+        try:
+            result = await self.processor.process_document(
+                file_path=sample_pdf_path,
+                document_id=1,
+                fund_id=postgres_test_fund.id
+            )
 
-        # Verify successful processing
-        assert result['status'] == 'completed', "Processing should complete successfully"
-        assert 'statistics' in result, "Should return statistics"
+            # Verify successful processing
+            assert result['status'] == 'completed', f"Processing should complete successfully. Got: {result.get('error', 'unknown error')}"
+            assert 'statistics' in result, "Should return statistics"
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "429" in str(e) or "rate" in error_msg or "quota" in error_msg:
+                pytest.skip(f"API rate limited or quota exceeded: {e}")
+            # Print result for debugging
+            if 'result' in locals():
+                print(f"Result: {result}")
+            raise
 
         stats = result['statistics']
 
@@ -68,18 +81,28 @@ class TestRealPDFProcessing:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.getenv("GOOGLE_API_KEY") and not os.getenv("OPENAI_API_KEY"),
+        reason="Requires API key for embeddings"
+    )
     async def test_verify_expected_data_from_sample_pdf(self, sample_pdf_path, postgres_test_fund):
         """Test that expected data is extracted from sample PDF"""
         if not os.path.exists(sample_pdf_path):
             pytest.skip(f"Sample PDF not found at {sample_pdf_path}")
 
-        result = await self.processor.process_document(
-            file_path=sample_pdf_path,
-            document_id=1,
-            fund_id=postgres_test_fund.id
-        )
+        try:
+            result = await self.processor.process_document(
+                file_path=sample_pdf_path,
+                document_id=1,
+                fund_id=postgres_test_fund.id
+            )
 
-        assert result['status'] == 'completed', "Processing should complete"
+            assert result['status'] == 'completed', f"Processing should complete. Got: {result.get('error', 'unknown error')}"
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "429" in str(e) or "rate" in error_msg or "quota" in error_msg:
+                pytest.skip(f"API rate limited or quota exceeded: {e}")
+            raise
 
         stats = result['statistics']
 

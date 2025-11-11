@@ -32,7 +32,30 @@ class ChatQueryResponse(BaseModel):
     answer: str
     sources: List[SourceDocument] = []
     metrics: Optional[Dict[str, Any]] = None
+    intent: Optional[str] = None
     processing_time: Optional[float] = None
+    error: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "answer": "The current DPI (Distributions to Paid-In) for this fund is 0.4000.",
+                "sources": [
+                    {
+                        "content": "DPI (Distributions to Paid-In Capital) is a key metric...",
+                        "metadata": {"document_id": 1, "fund_id": 1},
+                        "score": 0.95
+                    }
+                ],
+                "metrics": {
+                    "dpi": 0.4000,
+                    "irr": 0.1250,
+                    "pic": 10000000.00
+                },
+                "intent": "calculation",
+                "processing_time": 1.23
+            }
+        }
 
 
 class ConversationCreate(BaseModel):
