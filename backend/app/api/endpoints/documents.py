@@ -1,7 +1,7 @@
 """
 Document API endpoints
 """
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -14,7 +14,7 @@ from app.schemas.document import (
     DocumentUploadResponse,
     DocumentStatus
 )
-from app.services.document_processor import DocumentProcessor
+from app.tasks import process_document_task
 from app.core.config import settings
 
 router = APIRouter()
@@ -22,39 +22,43 @@ router = APIRouter()
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     fund_id: int = None,
     db: Session = Depends(get_db)
 ):
-    """Upload and process a PDF document"""
-    
+    """
+    Upload and process a PDF document using Celery background task
+
+    The document will be processed asynchronously by a Celery worker.
+    Use the returned task_id to check processing status.
+    """
+
     # Validate file type
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-    
+
     # Validate file size
     file.file.seek(0, 2)
     file_size = file.file.tell()
     file.file.seek(0)
-    
+
     if file_size > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"File size exceeds maximum allowed size of {settings.MAX_UPLOAD_SIZE} bytes"
         )
-    
+
     # Create upload directory if it doesn't exist
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    
+
     # Save file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_{file.filename}"
     file_path = os.path.join(settings.UPLOAD_DIR, filename)
-    
+
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    
+
     # Create document record
     document = Document(
         fund_id=fund_id,
@@ -65,62 +69,53 @@ async def upload_document(
     db.add(document)
     db.commit()
     db.refresh(document)
-    
-    # Start background processing
-    background_tasks.add_task(
-        process_document_task,
-        document.id,
-        file_path,
-        fund_id or 1  # Default fund_id if not provided
+
+    # Start Celery background task
+    task = process_document_task.delay(
+        file_path=file_path,
+        document_id=document.id,
+        fund_id=fund_id or 1  # Default fund_id if not provided
     )
-    
+
     return DocumentUploadResponse(
         document_id=document.id,
-        task_id=None,
+        task_id=task.id,
         status="pending",
-        message="Document uploaded successfully. Processing started."
+        message="Document uploaded successfully. Processing started in background."
     )
 
 
-async def process_document_task(document_id: int, file_path: str, fund_id: int):
-    """Background task to process document"""
-    from app.db.session import SessionLocal
-    
-    db = SessionLocal()
-    
-    try:
-        # Update status to processing
-        document = db.query(Document).filter(Document.id == document_id).first()
-        document.parsing_status = "processing"
-        db.commit()
-        
-        # Process document
-        processor = DocumentProcessor()
-        result = await processor.process_document(file_path, document_id, fund_id)
-        
-        # Update status
-        document.parsing_status = result["status"]
-        if result["status"] == "failed":
-            document.error_message = result.get("error")
-        db.commit()
-        
-    except Exception as e:
-        document = db.query(Document).filter(Document.id == document_id).first()
-        document.parsing_status = "failed"
-        document.error_message = str(e)
-        db.commit()
-    finally:
-        db.close()
+@router.get("/task/{task_id}/status")
+async def get_task_status(task_id: str):
+    """
+    Get Celery task status by task ID
+
+    Returns the current state of the background task.
+    """
+    from celery.result import AsyncResult
+
+    task_result = AsyncResult(task_id)
+
+    return {
+        "task_id": task_id,
+        "status": task_result.status,
+        "result": task_result.result if task_result.ready() else None,
+        "traceback": task_result.traceback if task_result.failed() else None
+    }
 
 
 @router.get("/{document_id}/status", response_model=DocumentStatus)
 async def get_document_status(document_id: int, db: Session = Depends(get_db)):
-    """Get document parsing status"""
+    """
+    Get document parsing status from database
+
+    Returns the stored status of the document processing.
+    """
     document = db.query(Document).filter(Document.id == document_id).first()
-    
+
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
     return DocumentStatus(
         document_id=document.id,
         status=document.parsing_status,
