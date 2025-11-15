@@ -56,6 +56,10 @@ pytest-asyncio==0.23.3
 pytest-cov==4.1.0
 httpx==0.26.0
 
+# Excel Export
+openpyxl==3.1.2
+xlsxwriter==3.1.9
+
 # Development
 black==23.12.1
 flake8==7.0.0

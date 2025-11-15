@@ -49,11 +49,18 @@ export default function UploadPage() {
     const poll = async () => {
       try {
         const status = await documentApi.getStatus(documentId)
-        
+
         if (status.status === 'completed') {
           setUploadStatus({
             status: 'success',
             message: 'Document processed successfully!',
+            documentId
+          })
+          setUploading(false)
+        } else if (status.status === 'completed_with_warnings') {
+          setUploadStatus({
+            status: 'success',
+            message: 'Document processed with warnings. Some tables may not have been extracted.',
             documentId
           })
           setUploading(false)

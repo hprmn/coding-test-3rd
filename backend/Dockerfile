@@ -10,13 +10,15 @@ RUN apt-get update && \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Copy requirements
+# Copy requirements first (for better layer caching)
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with cache mount
+# This caches downloaded packages between builds (HUGE speedup!)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
-# Copy application code
+# Copy application code (this layer changes most frequently)
 COPY . .
 
 # Create necessary directories

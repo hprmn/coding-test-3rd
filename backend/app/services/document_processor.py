@@ -114,14 +114,14 @@ class DocumentProcessor:
                 # Re-raise as DocumentProcessingError for unexpected errors
                 raise DocumentProcessingError(f"Error validating PDF: {str(e)}")
 
-    async def process_document(self, file_path: str, document_id: int, fund_id: int) -> Dict[str, Any]:
+    async def process_document(self, file_path: str, document_id: int, fund_id: int = None) -> Dict[str, Any]:
         """
         Process a PDF document - extract tables and text
 
         Args:
             file_path: Path to the PDF file
             document_id: Database document ID
-            fund_id: Fund ID
+            fund_id: Fund ID (optional - will be created from PDF metadata if not provided)
 
         Returns:
             Processing result with statistics
@@ -177,7 +177,43 @@ class DocumentProcessor:
                     if page_text:
                         all_text.append(page_text)
 
-                    # Extract tables from page
+                # Extract and chunk text for vector storage FIRST (before processing tables)
+                full_text = "\n\n".join(all_text)
+
+                # Extract fund metadata from text and create/get Fund record
+                if not fund_id:
+                    fund_metadata = self.table_parser.extract_fund_metadata(full_text)
+
+                    if fund_metadata and fund_metadata.get('name'):
+                        fund_id = self._create_or_get_fund(fund_metadata, document_id)
+                        if fund_id:
+                            stats['fund_created'] = True
+                            logger.info(f"Created/found fund with ID: {fund_id}")
+                        else:
+                            warning_msg = "Could not create fund from metadata, will use default"
+                            warnings.append(warning_msg)
+                            logger.warning(warning_msg)
+                    else:
+                        warning_msg = "Could not extract fund metadata from PDF"
+                        warnings.append(warning_msg)
+                        logger.warning(warning_msg)
+
+                # If still no fund_id, we can't proceed with table parsing
+                if not fund_id:
+                    error_msg = "No fund_id provided and could not extract fund metadata from PDF"
+                    logger.error(error_msg)
+                    return {
+                        'status': 'failed',
+                        'error': error_msg,
+                        'error_type': 'MissingFundError'
+                    }
+
+                # Now process tables with the fund_id
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    logger.debug(f"Processing tables on page {page_num}/{len(pdf.pages)}")
+
+                    # Extract text and tables from page
+                    page_text = page.extract_text()
                     tables = page.extract_tables()
 
                     if tables:
@@ -234,9 +270,6 @@ class DocumentProcessor:
                     warnings.append(warning_msg)
                     logger.warning(warning_msg)
 
-                # Extract and chunk text for vector storage
-                full_text = "\n\n".join(all_text)
-
                 # Check if we have any text content
                 if not full_text or len(full_text.strip()) < 50:
                     warning_msg = "PDF has very little or no extractable text. Document may contain only images."
@@ -245,6 +278,7 @@ class DocumentProcessor:
 
                 text_chunks = self._chunk_text(full_text, document_id, fund_id)
                 stats['text_chunks'] = len(text_chunks)
+                stats['fund_id'] = fund_id  # Return fund_id in stats for caller
 
                 # Store text chunks in vector database for RAG
                 if text_chunks:
@@ -518,3 +552,65 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Failed to store chunks to vector database: {e}")
             raise
+
+    def _create_or_get_fund(self, fund_metadata: Dict[str, Any], document_id: int) -> Optional[int]:
+        """
+        Create a new Fund record or get existing one based on metadata
+
+        Args:
+            fund_metadata: Dictionary with fund metadata (name, gp_name, vintage_year, fund_type)
+            document_id: Document ID to link
+
+        Returns:
+            Fund ID if successful, None otherwise
+        """
+        from app.models.document import Document
+
+        db = SessionLocal()
+        try:
+            fund_name = fund_metadata.get('name')
+            if not fund_name:
+                logger.warning("No fund name in metadata, cannot create fund")
+                return None
+
+            # Check if fund with same name already exists
+            existing_fund = db.query(Fund).filter(Fund.name == fund_name).first()
+
+            if existing_fund:
+                logger.info(f"Found existing fund: {fund_name} (ID: {existing_fund.id})")
+
+                # Update document's fund_id
+                document = db.query(Document).filter(Document.id == document_id).first()
+                if document:
+                    document.fund_id = existing_fund.id
+                    db.commit()
+
+                return existing_fund.id
+
+            # Create new fund
+            new_fund = Fund(
+                name=fund_name,
+                gp_name=fund_metadata.get('gp_name'),
+                fund_type=fund_metadata.get('fund_type'),
+                vintage_year=fund_metadata.get('vintage_year')
+            )
+            db.add(new_fund)
+            db.commit()
+            db.refresh(new_fund)
+
+            logger.info(f"Created new fund: {fund_name} (ID: {new_fund.id})")
+
+            # Update document's fund_id
+            document = db.query(Document).filter(Document.id == document_id).first()
+            if document:
+                document.fund_id = new_fund.id
+                db.commit()
+
+            return new_fund.id
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error creating/getting fund: {str(e)}", exc_info=True)
+            return None
+        finally:
+            db.close()

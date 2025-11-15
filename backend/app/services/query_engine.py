@@ -62,34 +62,62 @@ class QueryEngine:
         Initialize LLM based on configuration
 
         Priority:
-        1. OpenAI GPT (if API key configured)
-        2. Google Gemini (if API key configured)
-        3. Local Ollama (fallback)
+        1. LLM_PROVIDER setting (explicit provider selection)
+        2. OpenAI GPT (if API key configured)
+        3. Google Gemini (if API key configured)
+        4. Local Ollama (fallback)
 
         Returns:
             LLM instance
         """
         try:
-            if settings.OPENAI_API_KEY:
-                logger.info("Initializing OpenAI LLM")
+            # Check explicit provider setting first
+            provider = settings.LLM_PROVIDER.lower()
+
+            if provider == "ollama":
+                logger.info(f"Initializing Ollama LLM (model: {settings.OLLAMA_MODEL}, base_url: {settings.OLLAMA_BASE_URL})")
+                return Ollama(
+                    base_url=settings.OLLAMA_BASE_URL,
+                    model=settings.OLLAMA_MODEL,
+                    temperature=0
+                )
+            elif provider == "openai" and settings.OPENAI_API_KEY:
+                logger.info(f"Initializing OpenAI LLM (model: {settings.OPENAI_MODEL})")
                 return ChatOpenAI(
                     model=settings.OPENAI_MODEL,
                     temperature=0,  # Deterministic for financial data
                     openai_api_key=settings.OPENAI_API_KEY
                 )
-            elif settings.GOOGLE_API_KEY:
-                logger.info("Initializing Google Gemini LLM")
+            elif provider == "gemini" and settings.GOOGLE_API_KEY:
+                logger.info(f"Initializing Google Gemini LLM (model: {settings.GEMINI_MODEL})")
                 return ChatGoogleGenerativeAI(
                     model=settings.GEMINI_MODEL,
                     temperature=0,
                     google_api_key=settings.GOOGLE_API_KEY
                 )
             else:
-                logger.info("Initializing local Ollama LLM")
-                return Ollama(
-                    model="llama3.2",
-                    temperature=0
-                )
+                # Fallback logic based on available API keys
+                if settings.OPENAI_API_KEY:
+                    logger.info("Falling back to OpenAI LLM")
+                    return ChatOpenAI(
+                        model=settings.OPENAI_MODEL,
+                        temperature=0,
+                        openai_api_key=settings.OPENAI_API_KEY
+                    )
+                elif settings.GOOGLE_API_KEY:
+                    logger.info("Falling back to Google Gemini LLM")
+                    return ChatGoogleGenerativeAI(
+                        model=settings.GEMINI_MODEL,
+                        temperature=0,
+                        google_api_key=settings.GOOGLE_API_KEY
+                    )
+                else:
+                    logger.info("Falling back to local Ollama LLM")
+                    return Ollama(
+                        base_url=settings.OLLAMA_BASE_URL,
+                        model=settings.OLLAMA_MODEL,
+                        temperature=0
+                    )
         except Exception as e:
             logger.error(f"Failed to initialize LLM: {e}")
             raise

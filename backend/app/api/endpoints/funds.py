@@ -2,6 +2,7 @@
 Fund API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db.session import get_db
@@ -15,6 +16,7 @@ from app.schemas.transaction import (
     TransactionList
 )
 from app.services.metrics_calculator import MetricsCalculator
+from app.services.excel_exporter import ExcelExporter
 
 router = APIRouter()
 
@@ -151,11 +153,45 @@ async def get_fund_transactions(
 async def get_fund_metrics(fund_id: int, db: Session = Depends(get_db)):
     """Get fund metrics"""
     fund = db.query(Fund).filter(Fund.id == fund_id).first()
-    
+
     if not fund:
         raise HTTPException(status_code=404, detail="Fund not found")
-    
+
     calculator = MetricsCalculator(db)
     metrics = calculator.calculate_all_metrics(fund_id)
-    
+
     return FundMetrics(**metrics)
+
+
+@router.get("/{fund_id}/export")
+async def export_fund_to_excel(fund_id: int, db: Session = Depends(get_db)):
+    """
+    Export fund data to Excel file
+
+    Returns:
+        Excel file with fund details, transactions, and metrics
+    """
+    fund = db.query(Fund).filter(Fund.id == fund_id).first()
+
+    if not fund:
+        raise HTTPException(status_code=404, detail="Fund not found")
+
+    try:
+        exporter = ExcelExporter(db)
+        excel_file = exporter.export_fund_data(fund_id)
+
+        # Generate filename
+        filename = f"{fund.name.replace(' ', '_')}_Export.xlsx"
+
+        return StreamingResponse(
+            excel_file,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to export fund data: {str(e)}"
+        )

@@ -71,10 +71,11 @@ async def upload_document(
     db.refresh(document)
 
     # Start Celery background task
+    # fund_id is optional - will be extracted from PDF if not provided
     task = process_document_task.delay(
         file_path=file_path,
         document_id=document.id,
-        fund_id=fund_id or 1  # Default fund_id if not provided
+        fund_id=fund_id
     )
 
     return DocumentUploadResponse(

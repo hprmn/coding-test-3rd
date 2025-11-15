@@ -412,6 +412,96 @@ class TableParser:
         else:
             return 'Other'
 
+    def extract_fund_metadata(self, text: str) -> Dict[str, Any]:
+        """
+        Extract fund metadata from PDF text
+
+        Looks for fund information like:
+        - Fund Name
+        - GP (General Partner) Name
+        - Vintage Year
+        - Fund Type/Strategy
+
+        Args:
+            text: Full text content from PDF
+
+        Returns:
+            Dictionary with fund metadata
+        """
+        metadata = {}
+
+        # Extract Fund Name
+        fund_name_patterns = [
+            r'(?i)fund\s+name[\s:]+(.+?)(?=\n|$)',
+            r'(?i)^(.+?)\s*(?:fund|lp|gp)\s+(?:i{1,3}|iv|v|vi{0,3}|[0-9]+)\s*$',  # Match "Tech Ventures Fund III"
+        ]
+
+        for pattern in fund_name_patterns:
+            match = re.search(pattern, text, re.MULTILINE)
+            if match:
+                fund_name = match.group(1).strip()
+                if fund_name and len(fund_name) > 2:
+                    metadata['name'] = fund_name
+                    break
+
+        # If fund name not found via patterns, use first line if it looks like a fund name
+        if 'name' not in metadata:
+            first_line = text.split('\n')[0].strip()
+            if len(first_line) < 100 and ('fund' in first_line.lower() or 'ventures' in first_line.lower() or 'capital' in first_line.lower()):
+                metadata['name'] = first_line
+
+        # Extract GP Name
+        gp_patterns = [
+            r'(?i)gp[\s:]+(.+?)(?=\n|$)',
+            r'(?i)general partner[\s:]+(.+?)(?=\n|$)',
+            r'(?i)fund manager[\s:]+(.+?)(?=\n|$)',
+        ]
+
+        for pattern in gp_patterns:
+            match = re.search(pattern, text, re.MULTILINE)
+            if match:
+                gp_name = match.group(1).strip()
+                if gp_name and len(gp_name) > 2:
+                    metadata['gp_name'] = gp_name
+                    break
+
+        # Extract Vintage Year
+        vintage_patterns = [
+            r'(?i)vintage\s+year[\s:]+(\d{4})',
+            r'(?i)vintage[\s:]+(\d{4})',
+            r'(?i)inception[\s:]+(\d{4})',
+        ]
+
+        for pattern in vintage_patterns:
+            match = re.search(pattern, text)
+            if match:
+                year = int(match.group(1))
+                if 1990 <= year <= 2030:  # Sanity check
+                    metadata['vintage_year'] = year
+                    break
+
+        # Extract Fund Type/Strategy
+        strategy_patterns = [
+            r'(?i)fund strategy[\s:]+(.+?)(?=\n\n|\n[A-Z][a-z]+:|$)',
+            r'(?i)investment strategy[\s:]+(.+?)(?=\n\n|\n[A-Z][a-z]+:|$)',
+        ]
+
+        for pattern in strategy_patterns:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                strategy = match.group(1).strip()
+                if strategy and len(strategy) > 10:
+                    # Extract first sentence or first 200 chars for fund_type
+                    first_sentence = re.split(r'[.!?]', strategy)[0].strip()
+                    if len(first_sentence) < 200:
+                        metadata['fund_type'] = first_sentence
+                    else:
+                        metadata['fund_type'] = strategy[:200].strip()
+                    break
+
+        logger.info(f"Extracted fund metadata: {metadata}")
+        return metadata
+
     def extract_text_sections(self, text: str) -> Dict[str, str]:
         """
         Extract meaningful text sections for vector storage

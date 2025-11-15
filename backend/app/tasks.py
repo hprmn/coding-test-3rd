@@ -41,22 +41,24 @@ def process_document_task(
     self,
     file_path: str,
     document_id: int,
-    fund_id: int
+    fund_id: int = None
 ) -> Dict[str, Any]:
     """
     Process a PDF document in the background
 
     This task:
-    1. Extracts tables and text from PDF
-    2. Classifies tables (capital calls, distributions, adjustments)
-    3. Parses and stores data in database
-    4. Creates text chunks for vector storage
-    5. Updates document status
+    1. Extracts fund metadata from PDF (if fund_id not provided)
+    2. Creates/finds Fund record in database
+    3. Extracts tables and text from PDF
+    4. Classifies tables (capital calls, distributions, adjustments)
+    5. Parses and stores data in database
+    6. Creates text chunks for vector storage
+    7. Updates document status and fund_id
 
     Args:
         file_path: Path to the PDF file
         document_id: Database document ID
-        fund_id: Fund ID
+        fund_id: Fund ID (optional - will be extracted from PDF if not provided)
 
     Returns:
         Processing result with statistics
@@ -101,6 +103,10 @@ def process_document_task(
                 elif result['status'] == 'failed':
                     document.parsing_status = 'failed'
                     document.error_message = result.get('error', 'Unknown error')
+
+                # Update fund_id if it was extracted/created during processing
+                if result.get('statistics') and result['statistics'].get('fund_id'):
+                    document.fund_id = result['statistics']['fund_id']
 
                 db.commit()
         finally:

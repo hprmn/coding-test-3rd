@@ -19,7 +19,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings, OllamaEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.core.config import settings
 from app.db.session import SessionLocal
@@ -75,9 +75,10 @@ class VectorStore:
         Initialize embedding model based on configuration
 
         Priority:
-        1. OpenAI embeddings (if API key is configured)
-        2. Google Gemini embeddings (if API key is configured)
-        3. Local HuggingFace embeddings (fallback)
+        1. LLM_PROVIDER setting (explicit provider selection)
+        2. OpenAI embeddings (if API key is configured)
+        3. Google Gemini embeddings (if API key is configured)
+        4. Local HuggingFace embeddings (fallback)
 
         Returns:
             Embedding model instance
@@ -86,25 +87,48 @@ class VectorStore:
             EmbeddingError: If embedding initialization fails
         """
         try:
-            if settings.OPENAI_API_KEY:
-                logger.info("Initializing OpenAI embeddings (text-embedding-3-small)")
+            # Check explicit provider setting first
+            provider = settings.LLM_PROVIDER.lower()
+
+            if provider == "ollama":
+                logger.info(f"Initializing Ollama embeddings (model: {settings.OLLAMA_EMBEDDING_MODEL}, base_url: {settings.OLLAMA_BASE_URL})")
+                return OllamaEmbeddings(
+                    base_url=settings.OLLAMA_BASE_URL,
+                    model=settings.OLLAMA_EMBEDDING_MODEL
+                )
+            elif provider == "openai" and settings.OPENAI_API_KEY:
+                logger.info(f"Initializing OpenAI embeddings (model: {settings.OPENAI_EMBEDDING_MODEL})")
                 return OpenAIEmbeddings(
                     model=settings.OPENAI_EMBEDDING_MODEL,
                     openai_api_key=settings.OPENAI_API_KEY
                 )
-            elif settings.GOOGLE_API_KEY:
-                logger.info("Initializing Google Gemini embeddings (embedding-001)")
+            elif provider == "gemini" and settings.GOOGLE_API_KEY:
+                logger.info(f"Initializing Google Gemini embeddings (model: {settings.GEMINI_EMBEDDING_MODEL})")
                 return GoogleGenerativeAIEmbeddings(
                     model=settings.GEMINI_EMBEDDING_MODEL,
                     google_api_key=settings.GOOGLE_API_KEY
                 )
             else:
-                logger.info("Initializing local HuggingFace embeddings (all-MiniLM-L6-v2)")
-                return HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2",
-                    model_kwargs={'device': 'cpu'},
-                    encode_kwargs={'normalize_embeddings': True}
-                )
+                # Fallback logic based on available API keys
+                if settings.OPENAI_API_KEY:
+                    logger.info("Falling back to OpenAI embeddings")
+                    return OpenAIEmbeddings(
+                        model=settings.OPENAI_EMBEDDING_MODEL,
+                        openai_api_key=settings.OPENAI_API_KEY
+                    )
+                elif settings.GOOGLE_API_KEY:
+                    logger.info("Falling back to Google Gemini embeddings")
+                    return GoogleGenerativeAIEmbeddings(
+                        model=settings.GEMINI_EMBEDDING_MODEL,
+                        google_api_key=settings.GOOGLE_API_KEY
+                    )
+                else:
+                    logger.info("Falling back to local HuggingFace embeddings (all-MiniLM-L6-v2)")
+                    return HuggingFaceEmbeddings(
+                        model_name="sentence-transformers/all-MiniLM-L6-v2",
+                        model_kwargs={'device': 'cpu'},
+                        encode_kwargs={'normalize_embeddings': True}
+                    )
         except Exception as e:
             logger.error(f"Failed to initialize embeddings: {e}")
             raise EmbeddingError(f"Embedding initialization failed: {e}")
@@ -114,14 +138,28 @@ class VectorStore:
         Get dimension of embedding vectors based on model
 
         Returns:
-            Vector dimension (1536 for OpenAI, 768 for Gemini, 384 for HuggingFace)
+            Vector dimension based on provider:
+            - OpenAI text-embedding-3-small: 1536
+            - Google Gemini embedding-001: 768
+            - Ollama nomic-embed-text: 768
+            - HuggingFace all-MiniLM-L6-v2: 384
         """
-        if settings.OPENAI_API_KEY:
+        provider = settings.LLM_PROVIDER.lower()
+
+        if provider == "ollama":
+            return 768   # Ollama nomic-embed-text (default)
+        elif provider == "openai" and settings.OPENAI_API_KEY:
             return 1536  # OpenAI text-embedding-3-small
-        elif settings.GOOGLE_API_KEY:
+        elif provider == "gemini" and settings.GOOGLE_API_KEY:
             return 768   # Google Gemini embedding-001
         else:
-            return 384   # sentence-transformers/all-MiniLM-L6-v2
+            # Fallback logic
+            if settings.OPENAI_API_KEY:
+                return 1536
+            elif settings.GOOGLE_API_KEY:
+                return 768
+            else:
+                return 384   # sentence-transformers/all-MiniLM-L6-v2
 
     def _ensure_extension(self):
         """
@@ -245,11 +283,12 @@ class VectorStore:
             embedding_list = embedding.tolist()
 
             # Insert into database
+            # Use CAST() instead of :: operator to avoid parameter binding conflicts
             insert_sql = text("""
                 INSERT INTO document_embeddings
                     (document_id, fund_id, content, embedding, metadata)
                 VALUES
-                    (:document_id, :fund_id, :content, :embedding::vector, :metadata::jsonb)
+                    (:document_id, :fund_id, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
                 RETURNING id
             """)
 
@@ -343,11 +382,12 @@ class VectorStore:
 
                 # Batch insert into database
                 if values:
+                    # Use CAST() instead of :: operator to avoid parameter binding conflicts
                     insert_sql = text("""
                         INSERT INTO document_embeddings
                             (document_id, fund_id, content, embedding, metadata)
                         VALUES
-                            (:document_id, :fund_id, :content, :embedding::vector, :metadata::jsonb)
+                            (:document_id, :fund_id, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
                     """)
 
                     # Execute each insert individually in a transaction
@@ -427,7 +467,7 @@ class VectorStore:
             # Add similarity threshold filter
             if similarity_threshold is not None:
                 where_clauses.append(
-                    "(1 - (embedding <=> :query_embedding::vector)) >= :threshold"
+                    "(1 - (embedding <=> CAST(:query_embedding AS vector))) >= :threshold"
                 )
                 params["threshold"] = similarity_threshold
 
@@ -444,10 +484,10 @@ class VectorStore:
                     fund_id,
                     content,
                     metadata,
-                    1 - (embedding <=> :query_embedding::vector) as similarity_score
+                    1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity_score
                 FROM document_embeddings
                 {where_clause}
-                ORDER BY embedding <=> :query_embedding::vector
+                ORDER BY embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :k
             """)
 
